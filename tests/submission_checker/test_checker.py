@@ -698,6 +698,7 @@ class TestCheckerEdgeCases:
             "kimi-k3",
             "qwen3_6-35b-a3b",
             "deepseek-v4_1-flash",
+            "whisper-large-v3",
         ],
     )
     def test_model_name_allowed_passes(self, tmp_path, model_name):

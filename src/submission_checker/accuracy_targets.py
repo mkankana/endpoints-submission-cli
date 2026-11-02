@@ -86,6 +86,25 @@ _TARGETS: list[tuple[frozenset[str], dict[str, tuple[float, float | None]], int]
         },
         13368,
     ),
+    # whisper-large-v3 (speech2text) — the inference spec gates a single metric it
+    # names ACCURACY, defined as 100 - WER over the corpus: constants.py's
+    # accuracy-target is ("ACCURACY", (100.0 - 2.0671) * 0.99), i.e. golden WER
+    # 2.0671% → 97.9329 with the usual 0.99 floor (96.9536). Kept as the arithmetic
+    # rather than the product so the golden number stays readable, as above.
+    #
+    # WER is corpus-level (total edit distance ÷ total reference words), so a
+    # submission's score is one scalar for the whole dataset and this entry declares
+    # exactly one metric — which is what lets _gate_accuracy map an unnamed `score`
+    # onto it. min_queries is the "dataset-size" entry (1633); upstream requires
+    # Offline only, and §5.7.1 already exempts a dedicated Offline run from the
+    # latency metrics a non-streaming transcription endpoint cannot report.
+    (
+        frozenset({"whisper"}),
+        {
+            "accuracy": ((100.0 - 2.0671) * 0.99, None),
+        },
+        1633,
+    ),
 ]
 
 

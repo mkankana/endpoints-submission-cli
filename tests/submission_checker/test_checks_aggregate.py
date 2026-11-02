@@ -871,3 +871,56 @@ class TestAccuracyGateValidator:
             and "exact_match" in r.message
             for r in ctx._check_results
         )
+
+    # whisper-large-v3 (speech2text) reports one corpus-level scalar: WER is total
+    # edit distance ÷ total reference words, so there is nothing to aggregate across
+    # subsets. The spec gates `100 - WER` as ACCURACY ≥ 0.99 × 97.9329 = 96.9536.
+    def _whisper(self, tmp_path, score, num_samples=1633):
+        ar = AccuracyResult({"whisper_librispeech": {"num_samples": num_samples, "score": score}})
+        return _model_ctx(tmp_path, accuracy_result=ar, model_name="whisper-large-v3")
+
+    def test_whisper_reference_accuracy_passes(self, tmp_path):
+        ctx = self._whisper(tmp_path, 97.9329)
+        assert any(
+            r.rule == "accuracy-gate" and r.severity == Severity.INFO and "accuracy" in r.message
+            for r in ctx._check_results
+        )
+        assert not any(
+            r.rule == "accuracy-gate" and r.severity == Severity.ERROR for r in ctx._check_results
+        )
+
+    def test_whisper_at_the_floor_passes(self, tmp_path):
+        # The floor itself is inclusive: the gate is `score < lower`.
+        ctx = self._whisper(tmp_path, (100.0 - 2.0671) * 0.99)
+        assert not any(
+            r.rule == "accuracy-gate" and r.severity == Severity.ERROR for r in ctx._check_results
+        )
+
+    def test_whisper_below_the_floor_fails(self, tmp_path):
+        # WER 3.1% → accuracy 96.9 < 96.9536.
+        ctx = self._whisper(tmp_path, 96.9)
+        assert any(
+            r.rule == "accuracy-gate" and r.severity == Severity.ERROR and "accuracy" in r.message
+            for r in ctx._check_results
+        )
+
+    def test_whisper_scalar_score_is_mapped_with_a_warning(self, tmp_path):
+        # One declared metric, so the unnamed scalar is gated as `accuracy` - but the
+        # checker cannot verify the scalar's identity and says so.
+        ctx = self._whisper(tmp_path, 97.9329)
+        assert any(
+            r.rule == "accuracy-gate" and "unnamed scalar" in r.message for r in ctx._check_results
+        )
+
+    def test_whisper_partial_corpus_fails_sample_count(self, tmp_path):
+        # A smoke subset is not a reportable result: min_queries is the full 1633.
+        ctx = self._whisper(tmp_path, 97.9329, num_samples=8)
+        sc = [r for r in ctx._check_results if r.rule == "accuracy-sample-count"]
+        assert len(sc) == 1
+        assert sc[0].severity == Severity.ERROR and "1633" in sc[0].message
+
+    def test_whisper_full_corpus_passes_sample_count(self, tmp_path):
+        ctx = self._whisper(tmp_path, 97.9329)
+        sc = [r for r in ctx._check_results if r.rule == "accuracy-sample-count"]
+        assert len(sc) == 1
+        assert sc[0].severity != Severity.ERROR and "1633" in sc[0].message

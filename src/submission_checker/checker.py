@@ -84,6 +84,12 @@ _TPS_UTILIZATION_ABS_TOL = 0.1
 # `deepseek-v4_1-flash` is the README's "DeepSeek-V4.1-Flash", which its example config
 # serves as `deepseek-ai/DeepSeek-V4.1-Flash`. It replaced DeepSeek-V4-Pro
 # (`deepseek-v4-pro`), which is no longer an accepted benchmark model.
+#
+# `whisper-large-v3` is the reference repository's speech2text workload, served as
+# `openai/whisper-large-v3` on /v1/audio/transcriptions; the name is already canonical
+# (the org prefix drops and nothing else rewrites). Being an ASR model it is
+# non-streaming and Offline-only, which §5.7.1's dedicated-Offline exemption from the
+# latency metrics already covers; `accuracy_targets` carries its quality gate.
 _ALLOWED_MODEL_NAMES = (
     "llama3_1-8b",
     "gpt-oss-120b",
@@ -91,6 +97,7 @@ _ALLOWED_MODEL_NAMES = (
     "kimi-k3",
     "qwen3_6-35b-a3b",
     "deepseek-v4_1-flash",
+    "whisper-large-v3",
 )
 
 
