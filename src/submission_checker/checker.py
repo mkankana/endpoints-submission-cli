@@ -53,6 +53,7 @@ from .models.loader import (
     load_system_power,
 )
 from .models.regions import ULTRA_LOW_CONCURRENCY_MAX, validate_c_min_override
+from .offline_only import is_offline_only
 from .seed_sets import SeedSet, SeedSetError, load_seed_sets
 
 if TYPE_CHECKING:
@@ -710,8 +711,13 @@ class SubmissionChecker:
         results.extend(self._check_model_name(loaded))
 
         # ── Phase 1b: derive C_min, then the region boundaries ────────────────
+        # An Offline-only benchmark has no frontier to place, and §5.5's algorithm
+        # rejects the C_max it would declare (Offline is one unbounded-concurrency run,
+        # so there is nothing above 32 to report). Leaving regions None also switches
+        # off the per-point region placement below; ModelContext reports the waiver as
+        # `offline-only-frontier`.
         regions = None
-        if not override_results:
+        if not override_results and not is_offline_only(model_dir.name):
             regions, region_results = self._derive_regions(
                 c_max, loaded, unparsed, len(point_dirs), model_dir, sd_path, c_min_override
             )

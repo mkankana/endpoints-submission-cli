@@ -400,6 +400,12 @@ offline-declared:
   messages:
     fail: 'Invalid offline {offline!r}: must be one of {valid_offline}'
     pass: offline={offline!r}
+offline-only-frontier:
+  title: Offline-only benchmark
+  spec: §3.2, §5.7
+  messages:
+    pass: '{model} is collected in Offline only; §5.3 point count, §5.4 Ultra Low coverage and §§3–6
+      region coverage do not apply'
 offline-ordering:
   title: Offline point ordering
   spec: §5.7.2

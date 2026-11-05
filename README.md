@@ -478,7 +478,8 @@ validation by the service or reviewers.
 | `low-concurrency-coverage` | §9.1 | At least one point in the Low Concurrency region |
 | `med-concurrency-coverage` | §9.1 | At least one point in the Medium Concurrency region |
 | `high-concurrency-coverage` | §9.1 | At least one point in the High Concurrency region |
-| `point-count` | §5.3 | 7–32 measurement points; 8 with a dedicated Offline run; 7 for an agentic benchmark |
+| `offline-only-frontier` | §3.2, §5.7 | The benchmark is collected in Offline only, so `point-count`, `ultra-low-concurrency-coverage` and the three region-coverage rules do not apply to it |
+| `point-count` | §5.3 | 7–32 measurement points; 8 with a dedicated Offline run; 7 for an agentic benchmark; 1 for an Offline-only benchmark |
 | `benchmark-type-consistency` | §6.1, §8.5 | Every point on a frontier declares the same `load_pattern`, since one frontier is one benchmark |
 | `point-cap` | §2, §8 | Point count does not exceed 32 |
 
@@ -569,7 +570,7 @@ set published after this release.
 | Rule | Spec | Description |
 |------|------|-------------|
 | `accuracy-present` | §15 | At least one model in the submission carries accuracy results |
-| `accuracy-coverage` | §4.3, §5.3 | Exactly one accuracy result in each of the four mandatory bands, plus the Offline point (N=5; N=4 for an agentic benchmark, which has none). A result at any other point is an error, and one result cannot fill two bands |
+| `accuracy-coverage` | §4.3, §5.3 | Exactly one accuracy result in each of the four mandatory bands, plus the Offline point (N=5; N=4 for an agentic benchmark, which has none; N=1 for an Offline-only benchmark, which has no bands). A result at any other point is an error, and one result cannot fill two bands |
 | `accuracy-valid` | §15 | `accuracy_results.json` parses correctly |
 | `accuracy-sample-count` | §15 | Issued sample count meets the model's minimum |
 | `accuracy-gate` | §15 | Score meets the benchmark quality target |
@@ -639,6 +640,29 @@ percentage; a value outside that range is an error, never read as a percentage a
 The SWE-bench mean takes one value per mandatory band: a result outside the four bands
 is left out, and a band with several results is averaged into one value, with a warning
 (`accuracy-coverage` rejects such a frontier in any case).
+
+### Offline-only benchmarks
+
+Some benchmarks are collected in Offline only — upstream's required-scenarios table
+lists speech2text as `["Offline"]`. Such a submission is one Offline point and nothing
+else, so the rules describing a fixed-concurrency Pareto frontier do not apply to it:
+§5.3's point count drops to 1, §5.4's Ultra Low coverage and §§3–6's three
+concurrency-region rules stand down, and §5.5's boundary algorithm is not run (it
+requires a `C_max` above 32, which an Offline-only frontier has no points to place).
+The waiver is reported once, as `offline-only-frontier`, rather than as a pass on each
+rule it switches off.
+
+Everything that measures the result still applies. The accuracy gate, the sample-count
+floor, `model-name-valid`, `offline-point-present` and the `metric-consistency-*` family
+are unchanged, and the Offline point must still carry an accuracy run of its own — N is
+1, not 0.
+
+Which benchmarks these are is read from the model name
+(`submission_checker/offline_only.py`), never from the submission. Shipping a single
+`max_throughput` point does not earn the waiver: the name decides, and
+`model-name-valid` already pins it to one of §3.2's canonical spellings. Today the set
+is `whisper-large-v3`, which is also non-streaming, so §5.7.1's dedicated-Offline
+exemption from the latency metrics is what lets its one point report no TTFT or TPOT.
 
 ## Programmatic API
 

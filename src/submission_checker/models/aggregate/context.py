@@ -19,6 +19,7 @@ from ...agentic_targets import (
     AgenticTargets,
     get_agentic_targets,
 )
+from ...offline_only import is_offline_only
 from ..file.accuracy import PERFORMANCE_DATASET_TYPE, AccuracyResult
 from ..file.point_config import (
     LOAD_PATTERN_AGENTIC,
@@ -57,6 +58,10 @@ _BAND_LABELS = {
 }
 _MIN_POINTS = 7
 _MAX_POINTS = 32
+
+#: §5.3's minimum for an Offline-only benchmark (:mod:`submission_checker.offline_only`):
+#: the Offline point is the whole result, so there is no curve to require points on.
+_MIN_POINTS_OFFLINE_ONLY = 1
 
 
 def _weighted_mean(pairs: list[tuple[float, float | None]]) -> float:
@@ -194,6 +199,18 @@ class ModelContext(BaseModel):
         return patterns == {LOAD_PATTERN_AGENTIC}
 
     @property
+    def is_offline_only(self) -> bool:
+        """Whether this frontier's benchmark is collected in Offline only (§3.2, §5.7).
+
+        Read from the model directory name — §8.1 names it after §8.3's ``model_name``
+        and ``model-name-valid`` requires that to be a canonical §3.2 spelling — so a
+        submitter cannot reach this branch by declaring one ``max_throughput`` point.
+        See :mod:`submission_checker.offline_only` for why the Pareto rules do not
+        apply to such a frontier.
+        """
+        return is_offline_only(self.model_dir.name)
+
+    @property
     def _type_voting_points(self) -> list[tuple[Path, PointConfig]]:
         """The points whose load pattern declares the benchmark type.
 
@@ -245,7 +262,12 @@ class ModelContext(BaseModel):
         is 8. Electing the C_max point adds no run, so it stays at 7 — as does an
         agentic benchmark, where §5.7 does not apply and no Offline point may be
         present at all.
+
+        An Offline-only benchmark has no frontier, so its Offline point is the whole
+        submission and the minimum is 1.
         """
+        if self.is_offline_only:
+            return _MIN_POINTS_OFFLINE_ONLY
         if self.is_agentic:
             return _MIN_POINTS
         declared = {c.offline for _, c in self.offline_points}
@@ -408,8 +430,24 @@ class ModelContext(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _check_offline_only_frontier(self) -> ModelContext:
+        """Record that an Offline-only benchmark is exempt from the Pareto rules.
+
+        Reported once, rather than as a waiver on each rule it switches off, so a
+        reviewer reading the table sees a single statement of why §5.3's point count,
+        §5.4's Ultra Low coverage and §§3–6's regions are absent from it.
+        """
+        if self.is_offline_only:
+            self._check_results.append(
+                ok("offline-only-frontier", "pass", self.points_dir, model=self.model_dir.name)
+            )
+        return self
+
+    @model_validator(mode="after")
     def _check_ultra_low_concurrency_coverage(self) -> ModelContext:
         """§5.4: Ultra Low coverage is 1–32 by default, or 1–C_min with an override."""
+        if self.is_offline_only:
+            return self  # no frontier to cover; offline-only-frontier says so
         concurrencies = self._present_concurrencies
         limit = (
             self.regions.ultra_low_concurrency.end
@@ -449,6 +487,8 @@ class ModelContext(BaseModel):
         :func:`~submission_checker.models.regions.covered_region`, so a point in the
         10 % margin does not stand in for a High Concurrency point.
         """
+        if self.is_offline_only:
+            return self  # no frontier to cover; offline-only-frontier says so
         if self.regions is None:
             return self  # no C_min basis; region-basis already reported it
         r = self.regions
@@ -625,7 +665,12 @@ class ModelContext(BaseModel):
         because the Offline row below iterates ``offline_points``, which an agentic
         frontier has none of. The pass message names the applicable N so a reviewer can
         see which reading was applied.
+
+        An Offline-only benchmark has no bands, so N is 1: its Offline point's own
+        accuracy run is the whole requirement, and is still required.
         """
+        if self.is_offline_only:
+            return self._require_offline_accuracy()
         if self.regions is None or not self._present_concurrencies:
             return self
 
@@ -668,6 +713,14 @@ class ModelContext(BaseModel):
                 )
             )
 
+        return self._require_offline_accuracy()
+
+    def _require_offline_accuracy(self) -> ModelContext:
+        """§4.3, §9.1: each Offline point carries an accuracy run of its own.
+
+        Split out because it is the whole of ``accuracy-coverage`` for an Offline-only
+        benchmark, which reaches it without the band bookkeeping above.
+        """
         for _path, config in self.offline_points:
             if config.concurrency in self._accuracy_points:
                 self._check_results.append(

@@ -21,6 +21,7 @@ from submission_checker.models import (
     Severity,
     compute_regions,
 )
+from submission_checker.offline_only import is_offline_only
 
 from .conftest import _REGIONS, _config, _model_ctx, _summary
 
@@ -804,3 +805,137 @@ class TestAgenticDetermination:
             (tmp_path / "b.yaml", _offline_config(concurrency=24576)),
         ]
         assert _model_ctx(tmp_path, valid_points=pts).min_points == 8
+
+
+@pytest.mark.unit
+class TestOfflineOnlyBenchmarks:
+    """§3.2, §5.7: a benchmark collected in Offline only has no Pareto frontier.
+
+    Upstream's required-scenarios table lists speech2text as ``["Offline"]``, so
+    ``whisper-large-v3`` reports one Offline point and nothing else. The rules that
+    describe a fixed-concurrency curve must stand down for it — and, just as
+    importantly, must not stand down for anything else.
+    """
+
+    #: Whisper is scored on one corpus-level WER scalar (see `accuracy_targets`).
+    _WER = AccuracyResult(
+        {"whisper_librispeech": {"num_samples": 1633, "score": 98.1195, "dataset_type": "accuracy"}}
+    )
+
+    def _offline_only(self, tmp_path: Path, *, accuracy: bool = True, concurrency: int = 8):
+        pts = [(tmp_path / "r8" / "point.yaml", _offline_config(concurrency=concurrency))]
+        return _model_ctx(
+            tmp_path,
+            all_point_count=1,
+            valid_points=pts,
+            model_name="whisper-large-v3",
+            # §5.5's algorithm cannot run without a C_max above 32, so the checker
+            # leaves regions unset for an Offline-only frontier.
+            regions=None,
+            accuracy_by_point={concurrency: self._WER} if accuracy else {},
+        )
+
+    def _errors(self, ctx, rule: str):
+        return [r for r in ctx._check_results if r.rule == rule and r.severity == Severity.ERROR]
+
+    def test_is_offline_only_reads_the_model_directory(self, tmp_path: Path) -> None:
+        assert self._offline_only(tmp_path).is_offline_only
+        assert not _model_ctx(tmp_path, model_name="llama3-70b").is_offline_only
+
+    def test_minimum_point_count_is_one(self, tmp_path: Path) -> None:
+        ctx = self._offline_only(tmp_path)
+        assert ctx.min_points == 1
+        assert not self._errors(ctx, "point-count")
+
+    def test_a_single_point_frontier_passes_outright(self, tmp_path: Path) -> None:
+        """The whole point: one Offline run is a complete Offline-only submission."""
+        ctx = self._offline_only(tmp_path)
+        assert not [r for r in ctx._check_results if r.severity == Severity.ERROR]
+
+    def test_the_waiver_is_reported_once(self, tmp_path: Path) -> None:
+        """A reviewer should see why the coverage rows are absent, not just that they are."""
+        reported = [
+            r
+            for r in self._offline_only(tmp_path)._check_results
+            if r.rule == "offline-only-frontier"
+        ]
+        assert len(reported) == 1
+        assert "whisper-large-v3" in reported[0].message
+
+    def test_concurrency_coverage_rules_stand_down(self, tmp_path: Path) -> None:
+        """§5.4 and §§3–6 describe a curve this benchmark has none of."""
+        rules = {r.rule for r in self._offline_only(tmp_path)._check_results}
+        assert not rules & {
+            "ultra-low-concurrency-coverage",
+            "low-concurrency-coverage",
+            "med-concurrency-coverage",
+            "high-concurrency-coverage",
+        }
+
+    def test_a_high_concurrency_offline_point_is_not_an_ultra_low_failure(
+        self, tmp_path: Path
+    ) -> None:
+        """§5.7.1 fixes Offline concurrency to the dataset size, well above §5.4's 32.
+
+        Without the waiver this is how an Offline-only frontier fails: its one point is
+        too large to cover Ultra Low, and there is no other point to cover it.
+        """
+        ctx = self._offline_only(tmp_path, concurrency=1633)
+        assert not self._errors(ctx, "ultra-low-concurrency-coverage")
+
+    def test_the_offline_points_own_accuracy_run_is_still_required(self, tmp_path: Path) -> None:
+        """The waiver drops the bands, not §4.3. N is 1, and that one is mandatory."""
+        ctx = self._offline_only(tmp_path, accuracy=False)
+        assert self._errors(ctx, "accuracy-coverage")
+
+    def test_accuracy_coverage_passes_on_the_offline_point(self, tmp_path: Path) -> None:
+        ctx = self._offline_only(tmp_path)
+        assert [
+            r
+            for r in ctx._check_results
+            if r.rule == "accuracy-coverage" and r.severity != Severity.ERROR
+        ]
+
+    # ── the waiver must not generalise ────────────────────────────────────────
+
+    def test_an_ordinary_model_still_needs_its_frontier(self, tmp_path: Path) -> None:
+        """The guard is keyed on the benchmark, so a normal model is unaffected."""
+        pts = [(tmp_path / "r8" / "point.yaml", _offline_config(concurrency=8))]
+        ctx = _model_ctx(
+            tmp_path, all_point_count=1, valid_points=pts, model_name="llama3-70b", regions=None
+        )
+        assert ctx.min_points == 8
+        assert self._errors(ctx, "point-count")
+
+    def test_declaring_max_throughput_does_not_buy_the_waiver(self, tmp_path: Path) -> None:
+        """A submitter must not reach the waiver by shipping one Offline point.
+
+        ``is_offline_only`` reads the model name, which ``model-name-valid`` pins to a
+        canonical §3.2 spelling — so this is the only thing standing between the
+        permissive branch and any submission that wants it.
+        """
+        pts = [(tmp_path / "r8" / "point.yaml", _offline_config(concurrency=8))]
+        ctx = _model_ctx(
+            tmp_path, all_point_count=1, valid_points=pts, model_name="gpt-oss-120b", regions=None
+        )
+        assert not ctx.is_offline_only
+        assert self._errors(ctx, "point-count")
+
+    def test_a_near_miss_model_name_falls_through_to_the_strict_branch(
+        self, tmp_path: Path
+    ) -> None:
+        """Matched exactly, unlike `accuracy_targets`' keyword fragments."""
+        for name in ("whisper", "whisper-large-v3-turbo", "Whisper-Large-v3"):
+            pts = [(tmp_path / "r8" / "point.yaml", _offline_config(concurrency=8))]
+            ctx = _model_ctx(
+                tmp_path, all_point_count=1, valid_points=pts, model_name=name, regions=None
+            )
+            assert not ctx.is_offline_only, name
+
+    @pytest.mark.parametrize(
+        "name",
+        ["whisper-large-v3", "whisper_large_v3", "openai/whisper-large-v3", "WHISPER-LARGE-V3"],
+    )
+    def test_only_the_canonical_spelling_is_offline_only(self, name: str) -> None:
+        """§8.1's directory name is the key, so the served name is not a match."""
+        assert is_offline_only(name) == (name == "whisper-large-v3")
